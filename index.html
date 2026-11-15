@@ -1773,6 +1773,92 @@ table.data-table td.num, table.data-table th.num {
   });
 
   let curRevMode = 'weekly';
+  let curRevStockQuery = '';
+  let curRevCrossPeriod = true;
+
+  function updateRevStockFilter(val) {
+    curRevStockQuery = (val || '').trim();
+    renderRevStockBody();
+  }
+  function toggleRevCrossPeriod(checked) {
+    curRevCrossPeriod = !!checked;
+    renderRevStockBody();
+  }
+
+  function renderRevStockBody() {
+    const isWk = (curRevMode === 'weekly');
+    const S = isWk ? RV.weeklySummary : RV.monthlySummary;
+    const q = curRevStockQuery.toLowerCase();
+
+    let rows = S.stockRows || [];
+    if (q && curRevCrossPeriod) {
+      // Combine weekly + monthly without duplicates (by date+code)
+      const allRows = [...(RV.weeklySummary.stockRows || []), ...(RV.monthlySummary.stockRows || [])];
+      const seen = new Set();
+      rows = allRows.filter(r => {
+        const k = r.date + '_' + r.code;
+        if (seen.has(k)) return false;
+        seen.add(k);
+        return (r.code + ' ' + r.name).toLowerCase().includes(q);
+      }).sort((a, b) => b.date.localeCompare(a.date));
+    } else if (q) {
+      rows = rows.filter(r => (r.code + ' ' + r.name).toLowerCase().includes(q));
+    }
+
+    // Recompute 4-horizon stats for filtered rows
+    const calcSt = (key) => {
+      const vals = rows.map(r => r[key]).filter(v => v !== null && v !== undefined);
+      if (!vals.length) return { avg: null, win: null, cnt: 0 };
+      return {
+        avg: Math.round(vals.reduce((a, b) => a + b, 0) / vals.length * 100) / 100,
+        win: Math.round(vals.filter(v => v > 0).length / vals.length * 1000) / 10,
+        cnt: vals.length
+      };
+    };
+    const hStats = q ? {
+      day: calcSt('retDay'),
+      next: calcSt('retNext'),
+      d5: calcSt('ret5'),
+      d20: calcSt('ret20')
+    } : S.horizonStats;
+
+    const statsBox = $('revHorizonStatsBox');
+    if (statsBox) {
+      statsBox.innerHTML = [
+        ['⚡ 當沖平均 (T日)', hStats?.day],
+        ['🚀 隔日沖平均 (T+1)', hStats?.next],
+        ['📈 5日波段平均 (T+5)', hStats?.d5],
+        ['🏦 20日中期平均 (T+20)', hStats?.d20]
+      ].map(([lbl, st]) => `
+        <div class="metric-box" style="padding:10px 12px">
+          <h4 style="margin-bottom:4px">${lbl}</h4>
+          <div style="font-size:1.15rem;font-weight:700" class="${st && st.avg !== null ? cls(st.avg) : ''}">${st && st.avg !== null ? pct(st.avg, 2) : '— (未滿天數)'}</div>
+          <div style="font-size:0.78rem;color:var(--muted)">${st && st.cnt > 0 ? `勝率 ${fmt(st.win, 1)}%（樣本 ${st.cnt} 檔次）` : '尚無完整結算樣本'}</div>
+        </div>
+      `).join('');
+    }
+
+    const tbody = $('revStockTbody');
+    if (tbody) {
+      if (!rows.length) {
+        tbody.innerHTML = '<tr><td colspan="8" style="text-align:center;color:var(--muted);padding:18px">查無符合「' + esc(curRevStockQuery) + '」之進榜紀錄</td></tr>';
+      } else {
+        tbody.innerHTML = rows.map(r => `
+          <tr>
+            <td><b>${esc(r.date)}</b></td>
+            <td><span class="badge">#${r.rank}</span></td>
+            <td><b>${esc(r.code)} ${esc(r.name)}</b></td>
+            <td class="num ${r.retDay !== null ? cls(r.retDay) : ''}"><b>${r.retDay !== null ? pct(r.retDay, 2) : '—'}</b></td>
+            <td class="num ${r.retNext !== null ? cls(r.retNext) : ''}"><b>${r.retNext !== null ? pct(r.retNext, 2) : '—'}</b></td>
+            <td class="num ${r.ret5 !== null ? cls(r.ret5) : ''}"><b>${r.ret5 !== null ? pct(r.ret5, 2) + (r.ret5Days && r.ret5Days < 5 ? ` <small style="color:var(--muted)">(${r.ret5Days}日)</small>` : '') : '—'}</b></td>
+            <td class="num ${r.ret20 !== null ? cls(r.ret20) : ''}"><b>${r.ret20 !== null ? pct(r.ret20, 2) : '—'}</b></td>
+            <td><span class="badge ${r.tag.includes('雙強') || r.tag.includes('中期') ? 'val-cheap' : (r.tag.includes('拉回') ? 'val-dear' : '')}">${esc(r.tag)}</span></td>
+          </tr>
+        `).join('');
+      }
+    }
+  }
+
   function renderReviewCenter() {
     const box = $('revContentBox');
     ['btnRevWeekly', 'btnRevMonthly', 'btnRevRules'].forEach(id => $(id).classList.remove('primary'));
@@ -1846,20 +1932,19 @@ table.data-table td.num, table.data-table th.num {
           </div>
 
           <h4 style="margin:12px 0 8px;color:var(--accent)">二、精選 Top 3 個股逐檔多週期績效拆解（當沖 / 隔日沖 / 5日 / 20日 — 由新到舊排序）</h4>
-          <div class="detail-grid" style="margin-bottom:12px">
-            ${[
-              ['⚡ 當沖平均 (T日)', S.horizonStats?.day],
-              ['🚀 隔日沖平均 (T+1)', S.horizonStats?.next],
-              ['📈 5日波段平均 (T+5)', S.horizonStats?.d5],
-              ['🏦 20日中期平均 (T+20)', S.horizonStats?.d20]
-            ].map(([lbl, st]) => `
-              <div class="metric-box" style="padding:10px 12px">
-                <h4 style="margin-bottom:4px">${lbl}</h4>
-                <div style="font-size:1.15rem;font-weight:700" class="${st && st.avg !== null ? cls(st.avg) : ''}">${st && st.avg !== null ? pct(st.avg, 2) : '— (未滿天數)'}</div>
-                <div style="font-size:0.78rem;color:var(--muted)">${st && st.cnt > 0 ? `勝率 ${fmt(st.win, 1)}%（樣本 ${st.cnt} 檔次）` : '尚無完整結算樣本'}</div>
-              </div>
-            `).join('')}
+          <div style="display:flex;flex-wrap:wrap;gap:10px;align-items:center;margin-bottom:12px;padding:10px 12px;background:var(--panel-alt);border:1px solid var(--line);border-radius:8px">
+            <label style="font-size:0.84rem;font-weight:600;color:var(--ink)">🔍 個股歷史表現篩選：</label>
+            <input type="text" id="revStockFilterInput" value="${esc(curRevStockQuery)}" placeholder="輸入代號或名稱（如 2603、長榮、聚陽）" style="padding:6px 10px;border:1px solid var(--line);border-radius:6px;font-size:0.84rem;min-width:220px;background:var(--panel);color:var(--ink)">
+            <select id="revStockSelect" style="padding:6px 10px;border:1px solid var(--line);border-radius:6px;font-size:0.84rem;background:var(--panel);color:var(--ink)">
+              <option value="">-- 快速選擇曾進榜個股 --</option>
+              ${Array.from(new Map([...(RV.weeklySummary.stockRows||[]), ...(RV.monthlySummary.stockRows||[])].map(r => [r.code, r.code + ' ' + r.name])).entries()).sort((a,b) => a[0].localeCompare(b[0])).map(([c, lbl]) => `<option value="${esc(c)}" ${curRevStockQuery === c ? 'selected' : ''}>${esc(lbl)}</option>`).join('')}
+            </select>
+            <label style="font-size:0.82rem;color:var(--muted);display:inline-flex;align-items:center;gap:4px;cursor:pointer">
+              <input type="checkbox" id="revCrossPeriodChk" ${curRevCrossPeriod ? 'checked' : ''}> 跨週／月顯示該股全部進榜紀錄
+            </label>
+            <button type="button" id="revStockClearBtn" class="btn-tool" style="padding:5px 10px;font-size:0.8rem">清除篩選</button>
           </div>
+          <div id="revHorizonStatsBox" class="detail-grid" style="margin-bottom:12px"></div>
           <div class="table-wrap">
             <table class="data-table">
               <thead>
@@ -1874,24 +1959,30 @@ table.data-table td.num, table.data-table th.num {
                   <th>短中期屬性建議</th>
                 </tr>
               </thead>
-              <tbody>
-                ${(S.stockRows || []).map(r => `
-                  <tr>
-                    <td><b>${esc(r.date)}</b></td>
-                    <td><span class="badge">#${r.rank}</span></td>
-                    <td><b>${esc(r.code)} ${esc(r.name)}</b></td>
-                    <td class="num ${r.retDay !== null ? cls(r.retDay) : ''}"><b>${r.retDay !== null ? pct(r.retDay, 2) : '—'}</b></td>
-                    <td class="num ${r.retNext !== null ? cls(r.retNext) : ''}"><b>${r.retNext !== null ? pct(r.retNext, 2) : '—'}</b></td>
-                    <td class="num ${r.ret5 !== null ? cls(r.ret5) : ''}"><b>${r.ret5 !== null ? pct(r.ret5, 2) + (r.ret5Days && r.ret5Days < 5 ? ` <small style="color:var(--muted)">(${r.ret5Days}日)</small>` : '') : '—'}</b></td>
-                    <td class="num ${r.ret20 !== null ? cls(r.ret20) : ''}"><b>${r.ret20 !== null ? pct(r.ret20, 2) : '—'}</b></td>
-                    <td><span class="badge ${r.tag.includes('雙強') || r.tag.includes('中期') ? 'val-cheap' : (r.tag.includes('拉回') ? 'val-dear' : '')}">${esc(r.tag)}</span></td>
-                  </tr>
-                `).join('')}
-              </tbody>
+              <tbody id="revStockTbody"></tbody>
             </table>
           </div>
         </div>
       `;
+      const inp = $('revStockFilterInput');
+      const sel = $('revStockSelect');
+      const chk = $('revCrossPeriodChk');
+      const clr = $('revStockClearBtn');
+      if (inp) inp.addEventListener('input', (e) => {
+        if (sel) sel.value = '';
+        updateRevStockFilter(e.target.value);
+      });
+      if (sel) sel.addEventListener('change', (e) => {
+        if (inp) inp.value = e.target.value;
+        updateRevStockFilter(e.target.value);
+      });
+      if (chk) chk.addEventListener('change', (e) => toggleRevCrossPeriod(e.target.checked));
+      if (clr) clr.addEventListener('click', () => {
+        if (inp) inp.value = '';
+        if (sel) sel.value = '';
+        updateRevStockFilter('');
+      });
+      renderRevStockBody();
     } else {
       box.innerHTML = `
         <div class="card-panel">
